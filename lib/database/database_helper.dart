@@ -352,6 +352,7 @@ class DatabaseHelper {
     final db = await database;
 
     await db.transaction((txn) async {
+      // 1. Находим удаляемую операцию
       final txResult = await txn.query(
         'transactions',
         where: 'id = ?',
@@ -365,38 +366,145 @@ class DatabaseHelper {
       final type = txMap['type'] as String;
       final amount = (txMap['amount'] as num).toDouble();
 
-      final walletResult = await txn.query(
-        'wallets',
-        where: 'id = ?',
-        whereArgs: [walletId],
-        limit: 1,
-      );
-      if (walletResult.isEmpty) return;
+      // 2. Для обычных операций (income / expense) — как раньше
+      if (type == 'income' || type == 'expense') {
+        final walletResult = await txn.query(
+          'wallets',
+          where: 'id = ?',
+          whereArgs: [walletId],
+          limit: 1,
+        );
+        if (walletResult.isEmpty) return;
 
-      final currentBalance =
-      (walletResult.first['balance'] as num).toDouble();
+        final currentBalance =
+        (walletResult.first['balance'] as num).toDouble();
 
-      double newBalance = currentBalance;
-      if (type == 'income') {
-        newBalance = currentBalance - amount;
-      } else if (type == 'expense') {
-        newBalance = currentBalance + amount;
+        double newBalance = currentBalance;
+        if (type == 'income') {
+          newBalance = currentBalance - amount;
+        } else if (type == 'expense') {
+          newBalance = currentBalance + amount;
+        }
+
+        await txn.update(
+          'wallets',
+          {'balance': newBalance},
+          where: 'id = ?',
+          whereArgs: [walletId],
+        );
+
+        await txn.delete(
+          'transactions',
+          where: 'id = ?',
+          whereArgs: [transactionId],
+        );
+        return;
       }
 
-      await txn.update(
-        'wallets',
-        {'balance': newBalance},
-        where: 'id = ?',
-        whereArgs: [walletId],
-      );
+      // 3. Особая логика для transfer
+      if (type == 'transfer') {
+        // Эта запись может быть либо исходящим, либо входящим переводом.
+        // Находим вторую часть перевода: ту же сумму и дату, но другой кошелёк.
+        final date = txMap['date'] as String;
 
-      await txn.delete(
-        'transactions',
-        where: 'id = ?',
-        whereArgs: [transactionId],
-      );
+        final pairResult = await txn.query(
+          'transactions',
+          where:
+          'type = ? AND amount = ? AND date = ? AND id != ?',
+          whereArgs: ['transfer', amount, date, transactionId],
+        );
+
+        int? otherWalletId;
+        int? otherTxId;
+
+        if (pairResult.isNotEmpty) {
+          final other = pairResult.first;
+          otherWalletId = other['wallet_id'] as int;
+          otherTxId = other['id'] as int;
+        }
+
+        // Откатываем баланс кошелька, из которого удаляем запись
+        final firstWalletResult = await txn.query(
+          'wallets',
+          where: 'id = ?',
+          whereArgs: [walletId],
+          limit: 1,
+        );
+        if (firstWalletResult.isNotEmpty) {
+          final currentBalance =
+          (firstWalletResult.first['balance'] as num).toDouble();
+
+          // Если это исходящий перевод (по сути вычитали деньги),
+          // то при удалении нужно вернуть сумму обратно.
+          // Для входящего — наоборот вычесть.
+          double newBalance = currentBalance;
+          // Проверить, исходящий это или входящий, можно по note
+          final note = txMap['note'] as String? ?? '';
+          final isOut = note.contains('в "') || note.contains('на "'); // наш текст
+          if (isOut) {
+            newBalance = currentBalance + amount;
+          } else {
+            newBalance = currentBalance - amount;
+          }
+
+          await txn.update(
+            'wallets',
+            {'balance': newBalance},
+            where: 'id = ?',
+            whereArgs: [walletId],
+          );
+        }
+
+        // Откатываем баланс второго кошелька, если нашли вторую операцию
+        if (otherWalletId != null) {
+          final secondWalletResult = await txn.query(
+            'wallets',
+            where: 'id = ?',
+            whereArgs: [otherWalletId],
+            limit: 1,
+          );
+          if (secondWalletResult.isNotEmpty) {
+            final currentBalance =
+            (secondWalletResult.first['balance'] as num).toDouble();
+
+            double newBalance = currentBalance;
+            // Для второй записи делаем обратное действие
+            final otherNote =
+                (pairResult.first['note'] as String?) ?? '';
+            final otherIsOut =
+                otherNote.contains('в "') || otherNote.contains('на "');
+            if (otherIsOut) {
+              newBalance = currentBalance + amount;
+            } else {
+              newBalance = currentBalance - amount;
+            }
+
+            await txn.update(
+              'wallets',
+              {'balance': newBalance},
+              where: 'id = ?',
+              whereArgs: [otherWalletId],
+            );
+          }
+
+          // Удаляем вторую запись перевода
+          await txn.delete(
+            'transactions',
+            where: 'id = ?',
+            whereArgs: [otherTxId],
+          );
+        }
+
+        // Удаляем первую запись перевода
+        await txn.delete(
+          'transactions',
+          where: 'id = ?',
+          whereArgs: [transactionId],
+        );
+      }
     });
   }
+
 
   // ===== Категории =====
 
