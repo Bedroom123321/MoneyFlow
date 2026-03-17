@@ -2,6 +2,7 @@ import 'package:sqflite/sqflite.dart';
 import 'package:path/path.dart';
 import '../models/wallet.dart';
 import '../models/transaction.dart';
+import '../models/category.dart';
 
 class DatabaseHelper {
   static final DatabaseHelper instance = DatabaseHelper._init();
@@ -46,13 +47,50 @@ class DatabaseHelper {
         amount REAL NOT NULL,
         date TEXT NOT NULL,
         note TEXT,
+        category_id INTEGER,
         created_at TEXT NOT NULL,
-        FOREIGN KEY (wallet_id) REFERENCES wallets (id) ON DELETE CASCADE
+        FOREIGN KEY (wallet_id) REFERENCES wallets (id) ON DELETE CASCADE,
+        FOREIGN KEY (category_id) REFERENCES categories (id) ON DELETE SET NULL
       )
     ''');
+
+
+    await db.execute('''
+      CREATE TABLE categories (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT NOT NULL,
+        type TEXT NOT NULL, -- income / expense
+        icon TEXT NOT NULL
+      )
+    ''');
+
+    await db.insert('categories', {
+      'name': 'Зарплата',
+      'type': 'income',
+      'icon': 'salary',
+    });
+    await db.insert('categories', {
+      'name': 'Подарок',
+      'type': 'income',
+      'icon': 'gift',
+    });
+    await db.insert('categories', {
+      'name': 'Еда',
+      'type': 'expense',
+      'icon': 'food',
+    });
+    await db.insert('categories', {
+      'name': 'Транспорт',
+      'type': 'expense',
+      'icon': 'transport',
+    });
+    await db.insert('categories', {
+      'name': 'Жильё',
+      'type': 'expense',
+      'icon': 'home',
+    });
   }
 
-  // ===== Кошельки =====
 
   Future<int> createWallet(Wallet wallet) async {
     final db = await database;
@@ -113,6 +151,21 @@ class DatabaseHelper {
     await db.delete('wallets', where: 'id = ?', whereArgs: [walletId]);
   }
 
+  Future<void> updateWallet(Wallet wallet) async {
+    final db = await database;
+    await db.update(
+      'wallets',
+      {
+        'name': wallet.name,
+        'balance': wallet.balance,
+        'currency': wallet.currency,
+      },
+      where: 'id = ?',
+      whereArgs: [wallet.id],
+    );
+  }
+
+
   // ===== Операции =====
 
   Future<int> createTransaction(TransactionModel tx) async {
@@ -149,6 +202,140 @@ class DatabaseHelper {
       return id;
     });
   }
+
+  Future<int> createTransfer({
+    required int fromWalletId,
+    required int toWalletId,
+    required double amount,
+    required DateTime date,
+    String? note,
+  }) async {
+    final db = await database;
+
+    return await db.transaction<int>((txn) async {
+      final fromResult = await txn.query(
+        'wallets',
+        where: 'id = ?',
+        whereArgs: [fromWalletId],
+        limit: 1,
+      );
+      final toResult = await txn.query(
+        'wallets',
+        where: 'id = ?',
+        whereArgs: [toWalletId],
+        limit: 1,
+      );
+
+      if (fromResult.isEmpty || toResult.isEmpty) {
+        throw Exception('Кошелёк не найден');
+      }
+
+      final fromBalance =
+      (fromResult.first['balance'] as num).toDouble();
+      final toBalance =
+      (toResult.first['balance'] as num).toDouble();
+
+      if (amount <= 0 || amount > fromBalance) {
+        throw Exception('Недостаточно средств для перевода');
+      }
+
+      final fromName = fromResult.first['name'] as String;
+      final toName = toResult.first['name'] as String;
+
+      final dateIso = date.toIso8601String();
+      final createdIso = DateTime.now().toIso8601String();
+
+      final String outNote =
+      note?.trim().isNotEmpty == true ? note!.trim() : 'Перевод в "$toName"';
+      final String inNote =
+      note?.trim().isNotEmpty == true ? note!.trim() : 'Перевод из "$fromName"';
+
+      // Исходящий перевод
+      final outId = await txn.insert('transactions', {
+        'wallet_id': fromWalletId,
+        'type': 'transfer',
+        'amount': amount,
+        'date': dateIso,
+        'note': outNote,
+        'created_at': createdIso,
+      });
+
+      // Входящий перевод
+      await txn.insert('transactions', {
+        'wallet_id': toWalletId,
+        'type': 'transfer',
+        'amount': amount,
+        'date': dateIso,
+        'note': inNote,
+        'created_at': createdIso,
+      });
+
+      await txn.update(
+        'wallets',
+        {'balance': fromBalance - amount},
+        where: 'id = ?',
+        whereArgs: [fromWalletId],
+      );
+      await txn.update(
+        'wallets',
+        {'balance': toBalance + amount},
+        where: 'id = ?',
+        whereArgs: [toWalletId],
+      );
+
+      return outId;
+    });
+  }
+
+
+  Future<void> updateTransaction(TransactionModel oldTx, TransactionModel newTx) async {
+    final db = await database;
+
+    await db.transaction((txn) async {
+      // 1. Откатываем влияние старой операции на баланс кошелька
+      final walletResult = await txn.query(
+        'wallets',
+        where: 'id = ?',
+        whereArgs: [oldTx.walletId],
+        limit: 1,
+      );
+      if (walletResult.isEmpty) return;
+
+      final currentBalance =
+      (walletResult.first['balance'] as num).toDouble();
+
+      double balanceAfterRollback = currentBalance;
+      if (oldTx.type == 'income') {
+        balanceAfterRollback = currentBalance - oldTx.amount;
+      } else if (oldTx.type == 'expense') {
+        balanceAfterRollback = currentBalance + oldTx.amount;
+      }
+
+      // 2. Применяем новую операцию (пока не поддерживаем смену кошелька)
+      double finalBalance = balanceAfterRollback;
+      if (newTx.type == 'income') {
+        finalBalance = balanceAfterRollback + newTx.amount;
+      } else if (newTx.type == 'expense') {
+        finalBalance = balanceAfterRollback - newTx.amount;
+      }
+
+      await txn.update(
+        'wallets',
+        {'balance': finalBalance},
+        where: 'id = ?',
+        whereArgs: [newTx.walletId],
+      );
+
+      // 3. Обновляем запись в таблице transactions
+      await txn.update(
+        'transactions',
+        newTx.toMap(),
+        where: 'id = ?',
+        whereArgs: [oldTx.id],
+      );
+    });
+  }
+
 
   Future<List<TransactionModel>> getTransactionsForWallet(int walletId) async {
     final db = await database;
@@ -210,6 +397,49 @@ class DatabaseHelper {
       );
     });
   }
+
+  // ===== Категории =====
+
+  Future<List<Category>> getAllCategories({String? type}) async {
+    final db = await database;
+    List<Map<String, dynamic>> result;
+    if (type == null) {
+      result = await db.query('categories', orderBy: 'name ASC');
+    } else {
+      result = await db.query(
+        'categories',
+        where: 'type = ?',
+        whereArgs: [type],
+        orderBy: 'name ASC',
+      );
+    }
+    return result.map((e) => Category.fromMap(e)).toList();
+  }
+
+  Future<int> createCategory(Category category) async {
+    final db = await database;
+    return await db.insert('categories', category.toMap());
+  }
+
+  Future<int> updateCategory(Category category) async {
+    final db = await database;
+    return await db.update(
+      'categories',
+      category.toMap(),
+      where: 'id = ?',
+      whereArgs: [category.id],
+    );
+  }
+
+  Future<int> deleteCategory(int id) async {
+    final db = await database;
+    return await db.delete(
+      'categories',
+      where: 'id = ?',
+      whereArgs: [id],
+    );
+  }
+
 
   Future close() async {
     final db = await database;

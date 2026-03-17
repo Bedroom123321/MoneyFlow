@@ -5,10 +5,12 @@ import '../database/database_helper.dart';
 
 class CreateWalletScreen extends StatefulWidget {
   final bool isFirstWallet;
+  final Wallet? wallet; // если передан — режим редактирования
 
   const CreateWalletScreen({
     super.key,
     this.isFirstWallet = false,
+    this.wallet,
   });
 
   @override
@@ -17,13 +19,27 @@ class CreateWalletScreen extends StatefulWidget {
 
 class _CreateWalletScreenState extends State<CreateWalletScreen> {
   final _formKey = GlobalKey<FormState>();
-  final _nameController = TextEditingController();
-  final _balanceController = TextEditingController(text: '0');
-
-  String _selectedCurrency = 'BYN';
+  late final TextEditingController _nameController;
+  late final TextEditingController _balanceController;
+  late String _selectedCurrency;
   bool _isLoading = false;
 
   final List<String> _currencies = ['BYN', 'USD', 'EUR', 'RUB'];
+
+  bool get _isEditing => widget.wallet != null;
+
+  @override
+  void initState() {
+    super.initState();
+    // Если редактирование — предзаполняем поля
+    _nameController = TextEditingController(
+      text: _isEditing ? widget.wallet!.name : '',
+    );
+    _balanceController = TextEditingController(
+      text: _isEditing ? widget.wallet!.balance.toStringAsFixed(2) : '0',
+    );
+    _selectedCurrency = _isEditing ? widget.wallet!.currency : 'BYN';
+  }
 
   @override
   void dispose() {
@@ -32,32 +48,56 @@ class _CreateWalletScreenState extends State<CreateWalletScreen> {
     super.dispose();
   }
 
-  Future<void> _saveWallet() async {
+  Future<void> _save() async {
     if (!_formKey.currentState!.validate()) return;
 
     setState(() => _isLoading = true);
 
     try {
-      final wallet = Wallet(
-        name: _nameController.text.trim(),
-        balance: double.parse(_balanceController.text),
-        currency: _selectedCurrency,
+      final balance = double.parse(
+        _balanceController.text.replaceAll(',', '.'),
       );
 
-      await DatabaseHelper.instance.createWallet(wallet);
-
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Кошелёк "${wallet.name}" создан!'),
-            backgroundColor: Colors.green,
-          ),
+      if (_isEditing) {
+        // Режим редактирования
+        final updated = widget.wallet!.copyWith(
+          name: _nameController.text.trim(),
+          balance: balance,
+          currency: _selectedCurrency,
         );
+        await DatabaseHelper.instance.updateWallet(updated);
 
-        if (widget.isFirstWallet) {
-          Navigator.pushReplacementNamed(context, '/home');
-        } else {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('Кошелёк обновлён'),
+              backgroundColor: Colors.teal,
+            ),
+          );
           Navigator.pop(context, true);
+        }
+      } else {
+        // Режим создания
+        final wallet = Wallet(
+          name: _nameController.text.trim(),
+          balance: balance,
+          currency: _selectedCurrency,
+        );
+        await DatabaseHelper.instance.createWallet(wallet);
+
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('Кошелёк "${wallet.name}" создан!'),
+              backgroundColor: Colors.green,
+            ),
+          );
+
+          if (widget.isFirstWallet) {
+            Navigator.pushReplacementNamed(context, '/home');
+          } else {
+            Navigator.pop(context, true);
+          }
         }
       }
     } catch (e) {
@@ -78,9 +118,13 @@ class _CreateWalletScreenState extends State<CreateWalletScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: Text(widget.isFirstWallet
-            ? 'Создайте первый кошелёк'
-            : 'Новый кошелёк'),
+        title: Text(
+          _isEditing
+              ? 'Редактировать кошелёк'
+              : widget.isFirstWallet
+              ? 'Создайте первый кошелёк'
+              : 'Новый кошелёк',
+        ),
         centerTitle: true,
       ),
       body: SingleChildScrollView(
@@ -90,6 +134,7 @@ class _CreateWalletScreenState extends State<CreateWalletScreen> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
+              // Приветственный блок (только при первом запуске)
               if (widget.isFirstWallet) ...[
                 const Icon(
                   Icons.account_balance_wallet,
@@ -142,7 +187,7 @@ class _CreateWalletScreenState extends State<CreateWalletScreen> {
               TextFormField(
                 controller: _balanceController,
                 decoration: const InputDecoration(
-                  labelText: 'Начальный баланс',
+                  labelText: 'Баланс',
                   hintText: '0.00',
                   prefixIcon: Icon(Icons.attach_money),
                   border: OutlineInputBorder(),
@@ -152,14 +197,16 @@ class _CreateWalletScreenState extends State<CreateWalletScreen> {
                 ),
                 inputFormatters: [
                   FilteringTextInputFormatter.allow(
-                    RegExp(r'^\d*\.?\d{0,2}'),
+                    RegExp(r'^\d*[\.,]?\d{0,2}'),
                   ),
                 ],
                 validator: (value) {
                   if (value == null || value.isEmpty) {
-                    return 'Введите начальный баланс';
+                    return 'Введите баланс';
                   }
-                  final parsed = double.tryParse(value);
+                  final parsed = double.tryParse(
+                    value.replaceAll(',', '.'),
+                  );
                   if (parsed == null) {
                     return 'Некорректная сумма';
                   }
@@ -171,7 +218,7 @@ class _CreateWalletScreenState extends State<CreateWalletScreen> {
               ),
               const SizedBox(height: 20),
 
-              // Выбор валюты
+              // Валюта
               DropdownButtonFormField<String>(
                 value: _selectedCurrency,
                 decoration: const InputDecoration(
@@ -193,11 +240,11 @@ class _CreateWalletScreenState extends State<CreateWalletScreen> {
               ),
               const SizedBox(height: 32),
 
-              // Кнопка создания
+              // Кнопка сохранения
               SizedBox(
                 height: 50,
                 child: ElevatedButton(
-                  onPressed: _isLoading ? null : _saveWallet,
+                  onPressed: _isLoading ? null : _save,
                   style: ElevatedButton.styleFrom(
                     backgroundColor: Colors.teal,
                     foregroundColor: Colors.white,
@@ -207,10 +254,10 @@ class _CreateWalletScreenState extends State<CreateWalletScreen> {
                   ),
                   child: _isLoading
                       ? const CircularProgressIndicator(color: Colors.white)
-                      : const Text(
-                          'Создать кошелёк',
-                          style: TextStyle(fontSize: 18),
-                        ),
+                      : Text(
+                    _isEditing ? 'Сохранить изменения' : 'Создать кошелёк',
+                    style: const TextStyle(fontSize: 18),
+                  ),
                 ),
               ),
             ],

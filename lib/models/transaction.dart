@@ -1,10 +1,11 @@
 class TransactionModel {
   final int? id;
   final int walletId;
-  final String type; // 'income', 'expense'
+  final String type; // 'income', 'expense', 'transfer'
   final double amount;
   final DateTime date;
   final String? note;
+  final int? categoryId;
   final DateTime createdAt;
 
   TransactionModel({
@@ -14,6 +15,7 @@ class TransactionModel {
     required this.amount,
     required this.date,
     this.note,
+    this.categoryId,
     DateTime? createdAt,
   }) : createdAt = createdAt ?? DateTime.now();
 
@@ -25,6 +27,7 @@ class TransactionModel {
       'amount': amount,
       'date': date.toIso8601String(),
       'note': note,
+      'category_id': categoryId,
       'created_at': createdAt.toIso8601String(),
     };
   }
@@ -37,12 +40,15 @@ class TransactionModel {
       amount: (map['amount'] as num).toDouble(),
       date: DateTime.parse(map['date'] as String),
       note: map['note'] as String?,
+      categoryId: map['category_id'] as int?,
       createdAt: DateTime.parse(map['created_at'] as String),
     );
   }
 
   @override
   String toString() {
-    return 'Transaction(id: $id, walletId: $walletId, type: $type, amount: $amount)';
+    return 'Transaction(id: $id, walletId: $walletId, type: $type, '
+        'amount: $amount, categoryId: $categoryId)';
   }
 }
+

@@ -3,6 +3,7 @@ import 'database/database_helper.dart';
 import 'screens/home_screen.dart';
 import 'screens/create_wallet_screen.dart';
 import 'screens/wallet_list_screen.dart';
+import 'screens/categories_screen.dart';
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
@@ -27,6 +28,7 @@ class MoneyFlowApp extends StatelessWidget {
         '/home': (_) => const HomeScreen(),
         '/create-wallet': (_) => const CreateWalletScreen(),
         '/wallets': (_) => const WalletListScreen(),
+        '/categories': (_) => const CategoriesScreen(),
       },
     );
   }
@@ -70,3 +72,6 @@ class _AppStartupState extends State<AppStartup> {
     );
   }
 }
+
+
+

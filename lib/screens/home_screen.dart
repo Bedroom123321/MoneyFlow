@@ -5,6 +5,8 @@ import '../database/database_helper.dart';
 import 'create_wallet_screen.dart';
 import 'wallet_list_screen.dart';
 import 'add_transaction_screen.dart';
+import '../models/category.dart';
+
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -20,6 +22,7 @@ class _HomeScreenState extends State<HomeScreen> {
   double _incomeThisMonth = 0.0;
   double _expenseThisMonth = 0.0;
   List<TransactionModel> _lastTransactions = [];
+  Map<int, Category> _categoriesById = {};
 
   @override
   void initState() {
@@ -40,6 +43,7 @@ class _HomeScreenState extends State<HomeScreen> {
         _incomeThisMonth = 0.0;
         _expenseThisMonth = 0.0;
         _lastTransactions = [];
+        _categoriesById = {};
         _isLoading = false;
       });
       return;
@@ -50,21 +54,23 @@ class _HomeScreenState extends State<HomeScreen> {
 
     final database = await db.database;
 
+    // Доходы за месяц
     final incomeResult = await database.rawQuery(
       '''
-      SELECT SUM(amount) AS total 
-      FROM transactions 
-      WHERE wallet_id = ? AND type = 'income' AND date >= ?
-      ''',
+    SELECT SUM(amount) AS total
+    FROM transactions
+    WHERE wallet_id = ? AND type = 'income' AND date >= ?
+    ''',
       [active.id, monthStart.toIso8601String()],
     );
 
+    // Расходы за месяц
     final expenseResult = await database.rawQuery(
       '''
-      SELECT SUM(amount) AS total 
-      FROM transactions 
-      WHERE wallet_id = ? AND type = 'expense' AND date >= ?
-      ''',
+    SELECT SUM(amount) AS total
+    FROM transactions
+    WHERE wallet_id = ? AND type = 'expense' AND date >= ?
+    ''',
       [active.id, monthStart.toIso8601String()],
     );
 
@@ -73,24 +79,36 @@ class _HomeScreenState extends State<HomeScreen> {
     final expenseTotal =
         (expenseResult.first['total'] as num?)?.toDouble() ?? 0.0;
 
+    // Последние операции
     final lastTxMaps = await database.query(
       'transactions',
       where: 'wallet_id = ?',
       whereArgs: [active.id],
-      orderBy: 'date DESC',
+      orderBy: 'date DESC, id DESC',
       limit: 20,
     );
     final lastTx =
     lastTxMaps.map((e) => TransactionModel.fromMap(e)).toList();
+
+    // Все категории
+    final categoriesMaps = await database.query('categories');
+    final categories =
+    categoriesMaps.map((e) => Category.fromMap(e)).toList();
+    final catsById = <int, Category>{};
+    for (final c in categories) {
+      if (c.id != null) catsById[c.id!] = c;
+    }
 
     setState(() {
       _activeWallet = active;
       _incomeThisMonth = incomeTotal;
       _expenseThisMonth = expenseTotal;
       _lastTransactions = lastTx;
+      _categoriesById = catsById;
       _isLoading = false;
     });
   }
+
 
   Future<void> _navigateToCreateWallet() async {
     final result = await Navigator.push<bool>(
@@ -132,6 +150,13 @@ class _HomeScreenState extends State<HomeScreen> {
         title: const Text('Money Flow'),
         centerTitle: true,
         actions: [
+          IconButton(
+            icon: const Icon(Icons.category),
+            tooltip: 'Категории',
+            onPressed: () {
+              Navigator.pushNamed(context, '/categories');
+            },
+          ),
           IconButton(
             icon: const Icon(Icons.account_balance_wallet),
             tooltip: 'Мои кошельки',
@@ -338,8 +363,26 @@ class _HomeScreenState extends State<HomeScreen> {
 
   Widget _buildTransactionTile(TransactionModel tx) {
     final isIncome = tx.type == 'income';
-    final sign = isIncome ? '+' : '-';
-    final color = isIncome ? Colors.green : Colors.red;
+    final isExpense = tx.type == 'expense';
+    final isTransfer = tx.type == 'transfer';
+
+    String sign;
+    Color color;
+    IconData icon;
+
+    if (isTransfer) {
+      sign = '';
+      color = Colors.blue;
+      icon = Icons.swap_horiz;
+    } else if (isIncome) {
+      sign = '+';
+      color = Colors.green;
+      icon = Icons.arrow_downward;
+    } else {
+      sign = '-';
+      color = Colors.red;
+      icon = Icons.arrow_upward;
+    }
 
     final date = tx.date;
     final dateString =
@@ -347,22 +390,32 @@ class _HomeScreenState extends State<HomeScreen> {
         '${date.month.toString().padLeft(2, '0')}.'
         '${date.year}';
 
+    final title = tx.note?.isNotEmpty == true
+        ? tx.note!
+        : isTransfer
+        ? 'Перевод'
+        : (isIncome ? 'Доход' : 'Расход');
+
+    // имя категории, если есть
+    String? categoryName;
+    if (tx.categoryId != null) {
+      final cat = _categoriesById[tx.categoryId!];
+      categoryName = cat?.name;
+    }
+
+    final subtitleText = categoryName == null
+        ? dateString
+        : '$dateString · $categoryName';
+
     return InkWell(
-      onLongPress: () => _showDeleteTransactionDialog(tx),
+      onLongPress: () => _showTransactionActions(tx),
       child: ListTile(
         leading: CircleAvatar(
           backgroundColor: color.withOpacity(0.15),
-          child: Icon(
-            isIncome ? Icons.arrow_downward : Icons.arrow_upward,
-            color: color,
-          ),
+          child: Icon(icon, color: color),
         ),
-        title: Text(
-          tx.note?.isNotEmpty == true
-              ? tx.note!
-              : (isIncome ? 'Доход' : 'Расход'),
-        ),
-        subtitle: Text(dateString),
+        title: Text(title),
+        subtitle: Text(subtitleText),
         trailing: Text(
           '$sign${tx.amount.toStringAsFixed(2)}',
           style: TextStyle(
@@ -373,6 +426,65 @@ class _HomeScreenState extends State<HomeScreen> {
       ),
     );
   }
+
+  void _showTransactionActions(TransactionModel tx) {
+    showModalBottomSheet(
+      context: context,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+      ),
+      builder: (context) {
+        return SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Container(
+                  width: 40,
+                  height: 4,
+                  margin: const EdgeInsets.only(bottom: 16),
+                  decoration: BoxDecoration(
+                    color: Colors.grey[300],
+                    borderRadius: BorderRadius.circular(2),
+                  ),
+                ),
+                ListTile(
+                  leading: const Icon(Icons.edit, color: Colors.teal),
+                  title: const Text('Редактировать операцию'),
+                  onTap: () async {
+                    Navigator.pop(context); // закрываем bottom sheet
+                    if (_activeWallet == null) return;
+
+                    final result = await Navigator.push<bool>(
+                      this.context,
+                      MaterialPageRoute(
+                        builder: (_) => AddTransactionScreen(
+                          wallet: _activeWallet!,
+                          transaction: tx,
+                        ),
+                      ),
+                    );
+                    if (result == true) _loadData();
+                  },
+                ),
+                ListTile(
+                  leading: const Icon(Icons.delete, color: Colors.red),
+                  title: const Text('Удалить операцию'),
+                  onTap: () {
+                    Navigator.pop(context); // закрыть sheet
+                    _showDeleteTransactionDialog(tx); // старый диалог удаления
+                  },
+                ),
+                const SizedBox(height: 8),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+
 
   void _showDeleteTransactionDialog(TransactionModel tx) {
     showModalBottomSheet(
