@@ -3,10 +3,8 @@ import '../models/wallet.dart';
 import '../models/transaction.dart';
 import '../database/database_helper.dart';
 import 'create_wallet_screen.dart';
-import 'wallet_list_screen.dart';
 import 'add_transaction_screen.dart';
 import '../models/category.dart';
-
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -34,7 +32,6 @@ class _HomeScreenState extends State<HomeScreen> {
     setState(() => _isLoading = true);
 
     final db = DatabaseHelper.instance;
-
     final active = await db.getActiveWallet();
 
     if (active == null) {
@@ -51,26 +48,23 @@ class _HomeScreenState extends State<HomeScreen> {
 
     final now = DateTime.now();
     final monthStart = DateTime(now.year, now.month, 1);
-
     final database = await db.database;
 
-    // Доходы за месяц
     final incomeResult = await database.rawQuery(
       '''
-    SELECT SUM(amount) AS total
-    FROM transactions
-    WHERE wallet_id = ? AND type = 'income' AND date >= ?
-    ''',
+      SELECT SUM(amount) AS total
+      FROM transactions
+      WHERE wallet_id = ? AND type = 'income' AND date >= ?
+      ''',
       [active.id, monthStart.toIso8601String()],
     );
 
-    // Расходы за месяц
     final expenseResult = await database.rawQuery(
       '''
-    SELECT SUM(amount) AS total
-    FROM transactions
-    WHERE wallet_id = ? AND type = 'expense' AND date >= ?
-    ''',
+      SELECT SUM(amount) AS total
+      FROM transactions
+      WHERE wallet_id = ? AND type = 'expense' AND date >= ?
+      ''',
       [active.id, monthStart.toIso8601String()],
     );
 
@@ -79,7 +73,6 @@ class _HomeScreenState extends State<HomeScreen> {
     final expenseTotal =
         (expenseResult.first['total'] as num?)?.toDouble() ?? 0.0;
 
-    // Последние операции
     final lastTxMaps = await database.query(
       'transactions',
       where: 'wallet_id = ?',
@@ -90,7 +83,6 @@ class _HomeScreenState extends State<HomeScreen> {
     final lastTx =
     lastTxMaps.map((e) => TransactionModel.fromMap(e)).toList();
 
-    // Все категории
     final categoriesMaps = await database.query('categories');
     final categories =
     categoriesMaps.map((e) => Category.fromMap(e)).toList();
@@ -109,21 +101,12 @@ class _HomeScreenState extends State<HomeScreen> {
     });
   }
 
-
   Future<void> _navigateToCreateWallet() async {
     final result = await Navigator.push<bool>(
       context,
       MaterialPageRoute(builder: (_) => const CreateWalletScreen()),
     );
     if (result == true) _loadData();
-  }
-
-  Future<void> _navigateToWalletList() async {
-    await Navigator.push(
-      context,
-      MaterialPageRoute(builder: (_) => const WalletListScreen()),
-    );
-    _loadData();
   }
 
   Future<void> _navigateToAddTransaction() async {
@@ -139,42 +122,17 @@ class _HomeScreenState extends State<HomeScreen> {
 
   @override
   Widget build(BuildContext context) {
-    if (_isLoading) {
-      return const Scaffold(
-        body: Center(child: CircularProgressIndicator()),
-      );
-    }
-
     return Scaffold(
       appBar: AppBar(
         title: const Text('Money Flow'),
         centerTitle: true,
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.category),
-            tooltip: 'Категории',
-            onPressed: () {
-              Navigator.pushNamed(context, '/categories');
-            },
-          ),
-          IconButton(
-            icon: const Icon(Icons.account_balance_wallet),
-            tooltip: 'Мои кошельки',
-            onPressed: _navigateToWalletList,
-          ),
-        ],
       ),
-      body: _activeWallet == null
+      body: _isLoading
+          ? const Center(child: CircularProgressIndicator())  // ← просто body
+          : _activeWallet == null
           ? _buildEmptyState()
           : _buildDashboard(),
-      floatingActionButton: _activeWallet != null
-          ? FloatingActionButton(
-        onPressed: _navigateToAddTransaction,
-        backgroundColor: Colors.teal,
-        child: const Icon(Icons.add, color: Colors.white),
-      )
-          : null,
-    );
+      );
   }
 
   Widget _buildEmptyState() {
@@ -211,6 +169,7 @@ class _HomeScreenState extends State<HomeScreen> {
       child: ListView(
         padding: const EdgeInsets.all(16),
         children: [
+          // Карточка кошелька
           Card(
             elevation: 4,
             shape: RoundedRectangleBorder(
@@ -271,6 +230,7 @@ class _HomeScreenState extends State<HomeScreen> {
           ),
           const SizedBox(height: 20),
 
+          // Доходы / Расходы
           Row(
             children: [
               Expanded(
@@ -332,6 +292,7 @@ class _HomeScreenState extends State<HomeScreen> {
           ),
           const SizedBox(height: 20),
 
+          // Последние операции
           const Text(
             'Последние операции',
             style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
@@ -340,7 +301,7 @@ class _HomeScreenState extends State<HomeScreen> {
           if (_lastTransactions.isEmpty)
             Center(
               child: Padding(
-                padding: const EdgeInsets.all(32),
+                padding: const EdgeInsets.symmetric(vertical: 32),
                 child: Column(
                   children: [
                     Icon(Icons.receipt_long,
@@ -348,14 +309,24 @@ class _HomeScreenState extends State<HomeScreen> {
                     const SizedBox(height: 8),
                     Text(
                       'Операций пока нет',
-                      style: TextStyle(color: Colors.grey[600]),
+                      style:
+                      TextStyle(color: Colors.grey[600], fontSize: 15),
+                    ),
+                    const SizedBox(height: 16),
+                    FilledButton.icon(
+                      onPressed: _navigateToAddTransaction,
+                      icon: const Icon(Icons.add),
+                      label: const Text('Добавить первую операцию'),
+                      style: FilledButton.styleFrom(
+                        backgroundColor: Colors.teal,
+                      ),
                     ),
                   ],
                 ),
               ),
             )
           else
-            ..._lastTransactions.map(_buildTransactionTile).toList(),
+            ..._lastTransactions.map(_buildTransactionTile),
         ],
       ),
     );
@@ -363,7 +334,6 @@ class _HomeScreenState extends State<HomeScreen> {
 
   Widget _buildTransactionTile(TransactionModel tx) {
     final isIncome = tx.type == 'income';
-    final isExpense = tx.type == 'expense';
     final isTransfer = tx.type == 'transfer';
 
     String sign;
@@ -396,31 +366,77 @@ class _HomeScreenState extends State<HomeScreen> {
         ? 'Перевод'
         : (isIncome ? 'Доход' : 'Расход');
 
-    // имя категории, если есть
     String? categoryName;
     if (tx.categoryId != null) {
-      final cat = _categoriesById[tx.categoryId!];
-      categoryName = cat?.name;
+      categoryName = _categoriesById[tx.categoryId!]?.name;
     }
 
-    final subtitleText = categoryName == null
-        ? dateString
-        : '$dateString · $categoryName';
+    final subtitleText =
+    categoryName == null ? dateString : '$dateString · $categoryName';
 
-    return InkWell(
-      onLongPress: () => _showTransactionActions(tx),
-      child: ListTile(
-        leading: CircleAvatar(
-          backgroundColor: color.withOpacity(0.15),
-          child: Icon(icon, color: color),
+    return Dismissible(
+      key: ValueKey(tx.id),
+      direction: DismissDirection.endToStart,
+      background: Container(
+        alignment: Alignment.centerRight,
+        padding: const EdgeInsets.only(right: 20),
+        decoration: BoxDecoration(
+          color: Colors.red.shade400,
+          borderRadius: BorderRadius.circular(12),
         ),
-        title: Text(title),
-        subtitle: Text(subtitleText),
-        trailing: Text(
-          '$sign${tx.amount.toStringAsFixed(2)}',
-          style: TextStyle(
-            fontWeight: FontWeight.bold,
-            color: color,
+        child: const Icon(Icons.delete_outline,
+            color: Colors.white, size: 28),
+      ),
+      confirmDismiss: (_) async {
+        final confirm = await showDialog<bool>(
+          context: context,
+          builder: (dialogContext) => AlertDialog(
+            title: const Text('Удалить операцию?'),
+            content: const Text(
+              'Операция будет удалена, а баланс кошелька '
+                  'будет пересчитан с учётом её отмены.',
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(dialogContext).pop(false),
+                child: const Text('Отмена'),
+              ),
+              TextButton(
+                onPressed: () => Navigator.of(dialogContext).pop(true),
+                child: const Text(
+                  'Удалить',
+                  style: TextStyle(color: Colors.red),
+                ),
+              ),
+            ],
+          ),
+        );
+        if (confirm == true) {
+          await DatabaseHelper.instance.deleteTransaction(tx.id!);
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(content: Text('Операция удалена')),
+            );
+            _loadData();
+          }
+        }
+        return false;
+      },
+      child: InkWell(
+        onLongPress: () => _showTransactionActions(tx),
+        child: ListTile(
+          leading: CircleAvatar(
+            backgroundColor: color.withOpacity(0.15),
+            child: Icon(icon, color: color),
+          ),
+          title: Text(title),
+          subtitle: Text(subtitleText),
+          trailing: Text(
+            '$sign${tx.amount.toStringAsFixed(2)}',
+            style: TextStyle(
+              fontWeight: FontWeight.bold,
+              color: color,
+            ),
           ),
         ),
       ),
@@ -453,9 +469,8 @@ class _HomeScreenState extends State<HomeScreen> {
                   leading: const Icon(Icons.edit, color: Colors.teal),
                   title: const Text('Редактировать операцию'),
                   onTap: () async {
-                    Navigator.pop(context); // закрываем bottom sheet
+                    Navigator.pop(context);
                     if (_activeWallet == null) return;
-
                     final result = await Navigator.push<bool>(
                       this.context,
                       MaterialPageRoute(
@@ -472,8 +487,8 @@ class _HomeScreenState extends State<HomeScreen> {
                   leading: const Icon(Icons.delete, color: Colors.red),
                   title: const Text('Удалить операцию'),
                   onTap: () {
-                    Navigator.pop(context); // закрыть sheet
-                    _showDeleteTransactionDialog(tx); // старый диалог удаления
+                    Navigator.pop(context);
+                    _showDeleteTransactionDialog(tx);
                   },
                 ),
                 const SizedBox(height: 8),
@@ -484,7 +499,6 @@ class _HomeScreenState extends State<HomeScreen> {
       },
     );
   }
-
 
   void _showDeleteTransactionDialog(TransactionModel tx) {
     showModalBottomSheet(
@@ -513,7 +527,6 @@ class _HomeScreenState extends State<HomeScreen> {
                   title: const Text('Удалить операцию'),
                   onTap: () async {
                     Navigator.pop(context);
-
                     final confirm = await showDialog<bool>(
                       context: this.context,
                       builder: (dialogContext) {
@@ -541,15 +554,13 @@ class _HomeScreenState extends State<HomeScreen> {
                         );
                       },
                     );
-
                     if (confirm == true) {
                       await DatabaseHelper.instance
                           .deleteTransaction(tx.id!);
                       if (mounted) {
                         ScaffoldMessenger.of(this.context).showSnackBar(
                           const SnackBar(
-                            content: Text('Операция удалена'),
-                          ),
+                              content: Text('Операция удалена')),
                         );
                         _loadData();
                       }

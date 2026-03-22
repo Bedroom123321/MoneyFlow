@@ -554,4 +554,73 @@ class DatabaseHelper {
     db.close();
     _database = null;
   }
+
+  // ===== Статистика =====
+
+  Future<Map<String, double>> getIncomeExpenseSums({
+    required int walletId,
+    required DateTime from,
+    required DateTime to,
+  }) async {
+    final db = await database;
+
+    final incomeResult = await db.rawQuery(
+      '''
+    SELECT COALESCE(SUM(amount), 0) AS total
+    FROM transactions
+    WHERE wallet_id = ? AND type = 'income'
+      AND date >= ? AND date <= ?
+    ''',
+      [walletId, from.toIso8601String(), to.toIso8601String()],
+    );
+
+    final expenseResult = await db.rawQuery(
+      '''
+    SELECT COALESCE(SUM(amount), 0) AS total
+    FROM transactions
+    WHERE wallet_id = ? AND type = 'expense'
+      AND date >= ? AND date <= ?
+    ''',
+      [walletId, from.toIso8601String(), to.toIso8601String()],
+    );
+
+    final income =
+        (incomeResult.first['total'] as num?)?.toDouble() ?? 0.0;
+    final expense =
+        (expenseResult.first['total'] as num?)?.toDouble() ?? 0.0;
+
+    return {'income': income, 'expense': expense};
+  }
+
+  Future<List<Map<String, dynamic>>> getExpensesByCategory({
+    required int walletId,
+    required DateTime from,
+    required DateTime to,
+    String type = 'expense', // SCRUM-81: теперь тип передаётся снаружи
+  }) async {
+    final db = await database;
+
+    final result = await db.rawQuery(
+      '''
+    SELECT
+      c.id        AS category_id,
+      c.name      AS category_name,
+      COALESCE(SUM(t.amount), 0) AS total
+    FROM transactions t
+    LEFT JOIN categories c ON t.category_id = c.id
+    WHERE t.wallet_id = ?
+      AND t.type = ?
+      AND t.date >= ? AND t.date <= ?
+    GROUP BY t.category_id
+    ORDER BY total DESC
+    ''',
+      [walletId, type, from.toIso8601String(), to.toIso8601String()],
+    );
+
+    return result;
+  }
+
+
 }
+
+

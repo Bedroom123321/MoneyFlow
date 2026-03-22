@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 import 'database/database_helper.dart';
-import 'screens/home_screen.dart';
+import 'screens/main_shell.dart';
 import 'screens/create_wallet_screen.dart';
 import 'screens/wallet_list_screen.dart';
 import 'screens/categories_screen.dart';
@@ -25,7 +25,7 @@ class MoneyFlowApp extends StatelessWidget {
       ),
       home: const AppStartup(),
       routes: {
-        '/home': (_) => const HomeScreen(),
+        '/home': (_) => const MainShell(),         // ← изменено
         '/create-wallet': (_) => const CreateWalletScreen(),
         '/wallets': (_) => const WalletListScreen(),
         '/categories': (_) => const CategoriesScreen(),
@@ -50,7 +50,6 @@ class _AppStartupState extends State<AppStartup> {
 
   Future<void> _checkWallets() async {
     final wallets = await DatabaseHelper.instance.getAllWallets();
-
     if (!mounted) return;
 
     if (wallets.isEmpty) {
@@ -72,6 +71,3 @@ class _AppStartupState extends State<AppStartup> {
     );
   }
 }
-
-
-
